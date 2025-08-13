@@ -21,16 +21,16 @@ gcc -O2 -fopenmp -std=c11 traffic_omp.c -o traffic_omp
 #### Correr:
 
 - v: número de vehículos
-- p: número de pasos
+- t: tiempo de impresión de iteraciones
 
 Secuencial:
 
 ```bash
-./traffic_seq v p
+./traffic_seq v t
 ```
 
 Paralelo:
 
 ```bash
-OMP_NUM_THREADS=4 ./traffic_omp v p
+OMP_NUM_THREADS=8 ./traffic_omp v t
 ```

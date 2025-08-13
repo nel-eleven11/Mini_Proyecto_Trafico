@@ -1,26 +1,12 @@
 // traffic_omp.c
-// Simulación simple de tráfico con semáforos y vehículos (Versión Paralela con OpenMP)
-// Pasos implementados: 1 a 6 (el 7 se hará después de pruebas)
-// Compilación: gcc -O2 -fopenmp -std=c11 traffic_omp.c -o traffic_omp
-// Ejecución de ejemplo:
-//   OMP_NUM_THREADS=4 ./traffic_omp 8 60 1
-//   OMP_NUM_THREADS=8 ./traffic_omp 80 120 10
-//
-// Cambios solicitados en esta versión paralela:
-//  - "Resumen de configuración" al inicio (vehículos y semáforos).
-//  - Impresión de estado cada k segundos (argumento 3).
-//  - Cada vehículo solo puede cruzar UNA vez (finished).
-//  - Paro anticipado si todos cruzaron.
-//  - Paralelización clara de actualización de semáforos y movimiento de vehículos.
-//  - Ajuste dinámico de hilos por iteración (Paso 6) con omp_set_dynamic y heurística.
-//
-// Simplificaciones: mismas que la versión secuencial.
+// Simulación de tráfico con semáforos y vehículos (Versión Paralela con OpenMP)
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <time.h>
 #include <math.h>
+#include <sys/time.h>
 #include <omp.h>
 
 typedef enum { RED = 0, GREEN = 1, YELLOW = 2 } LightState;
@@ -40,7 +26,7 @@ typedef struct {
     int    lane;           // 0..3 (N, E, S, O)
     double pos;            // distancia a la línea de alto (m)
     double speed;          // m/s
-    bool   waiting;        // si está detenido esperando verde
+    bool   waiting;        // está detenido
     double total_wait;     // s acumulados esperando
     int    crossings;      // 0 o 1 (cruzó)
     bool   finished;       // true cuando ya cruzó
@@ -58,6 +44,12 @@ static inline double rand_uniform(double a, double b) { return a + (b - a) * (ra
 
 static inline const char* state_to_str(LightState s) {
     return (s == GREEN) ? "V" : (s == YELLOW ? "A" : "R");
+}
+
+static inline double now_seconds() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
 }
 
 // ----------------------- Semáforos (Paso 3) -----------------------
@@ -89,7 +81,7 @@ void update_traffic_light(TrafficLight* L, double dt) {
 // ----------------------- Vehículos (Paso 4) -----------------------
 // Devuelve 1 si el vehículo cruzó en este paso; 0 si no.
 int move_vehicle(Vehicle* V, const Intersection* X, double dt) {
-    if (V->finished) return 0; // ya cruzó antes
+    if (V->finished) return 0; // ya cruzó
 
     TrafficLight* L = &X->lights[V->lane];
 
@@ -126,9 +118,10 @@ void init_intersection(Intersection* X, int num_lanes) {
 
     for (int i = 0; i < X->num_lights; ++i) {
         X->lights[i].id = i;
-        X->lights[i].t_green  = 12.0;
-        X->lights[i].t_yellow = 3.0;
-        X->lights[i].t_red    = 15.0;
+        // Tiempos distintos por semáforo
+        X->lights[i].t_green  = rand_uniform(5.0, 9.0); // 5–9 s
+        X->lights[i].t_yellow = rand_uniform(2.0, 4.0); // 2–4 s
+        X->lights[i].t_red    = rand_uniform(5.0, 9.0); // 5–9 s
         X->lights[i].state = (i % 2 == 0) ? GREEN : RED;
         X->lights[i].time_in_state = 0.0;
     }
@@ -196,27 +189,30 @@ int choose_threads(int num_vehicles, int num_lights_green) {
 }
 
 // ----------------------- Simulación (Paso 5-6) -----------------------
-void run_simulation(int num_vehicles, int steps, int print_every, double dt, unsigned int seed) {
+void run_simulation(int num_vehicles, int print_every, double dt, unsigned int seed) {
     srand(seed);
+
+    double wall_t0 = now_seconds(); // inicio medición wall-clock
 
     Intersection X;
     init_intersection(&X, 4);
     Vehicle* V = init_vehicles(num_vehicles);
 
-    // Mostrar resumen de configuración
+    // Resumen de configuración
     print_configuration(V, num_vehicles, &X);
 
     int total_crossed = 0;
     int* crossed_now = (int*)calloc(num_vehicles, sizeof(int));
+    int step = 0;
+    double sim_time = 0.0;
 
-    // Habilitar ajuste dinámico global (el runtime puede modificar el tamaño real del equipo)
+    // Habilitar ajuste dinámico global (runtime puede ajustar el tamaño real del equipo)
     omp_set_dynamic(1);
     omp_set_nested(0);
 
-    for (int t = 0; t < steps; ++t) {
-        double sim_time = (t * dt);
-
-        // Contar luces verdes actuales (para la heurística de hilos)
+    // Bucle: termina cuando todos cruzaron
+    while (total_crossed < num_vehicles) {
+        // Contar luces verdes actuales (para elegir hilos)
         int greens_now = 0;
         for (int i = 0; i < X.num_lights; ++i) if (X.lights[i].state == GREEN) greens_now++;
 
@@ -229,7 +225,7 @@ void run_simulation(int num_vehicles, int steps, int print_every, double dt, uns
             update_traffic_light(&X.lights[i], dt);
         }
 
-        // Limpiar eventos de esta iteración
+        // Limpiar eventos de cruce
         #pragma omp parallel for schedule(static)
         for (int i = 0; i < num_vehicles; ++i) crossed_now[i] = 0;
 
@@ -238,24 +234,23 @@ void run_simulation(int num_vehicles, int steps, int print_every, double dt, uns
         #pragma omp parallel for reduction(+:crossed_step) schedule(dynamic, 64)
         for (int i = 0; i < num_vehicles; ++i) {
             int c = move_vehicle(&V[i], &X, dt);
-            if (c) crossed_now[i] = 1; // cada hilo escribe su propio índice (seguro)
+            if (c) crossed_now[i] = 1;
             crossed_step += c;
         }
-
         total_crossed += crossed_step;
 
-        if (print_every > 0 && (t % print_every) == 0) {
-            print_state(t, sim_time + dt, V, crossed_now, num_vehicles, &X);
-            // Nota: threads es el objetivo; omp_set_dynamic(1) permite al runtime ajustarlo
-            printf("Estado de hilos -> objetivo=%d, max=%d\n\n", threads, omp_get_max_threads());
-        }
+        step += 1;
+        sim_time += dt;
 
-        if (total_crossed >= num_vehicles) {
-            printf("Todos los vehículos han cruzado. Fin anticipado de la simulación en t=%.0fs.\n\n", sim_time + dt);
-            break;
+        if (print_every > 0 && (step % print_every) == 0) {
+            print_state(step, sim_time, V, crossed_now, num_vehicles, &X);
+            printf("Estado de hilos -> objetivo=%d, max=%d\n\n", threads, omp_get_max_threads());
         }
     }
 
+    double wall_t1 = now_seconds(); // fin medición
+
+    // Métricas finales
     double avg_wait = 0.0;
     int total_crossings = 0;
     for (int i = 0; i < num_vehicles; ++i) {
@@ -265,10 +260,12 @@ void run_simulation(int num_vehicles, int steps, int print_every, double dt, uns
     avg_wait /= (double)num_vehicles;
 
     printf("\n--- Resumen (OpenMP) ---\n");
-    printf("Vehículos: %d, Pasos ejecutados (máx): %d, dt=%.1f s\n", num_vehicles, steps, dt);
+    printf("Vehículos: %d, Pasos ejecutados: %d, dt=%.1f s\n", num_vehicles, step, dt);
     printf("Vehículos que cruzaron: %d/%d\n", total_crossed, num_vehicles);
     printf("Cruces totales por vehículo (suma de V.crossings): %d\n", total_crossings);
     printf("Espera promedio por vehículo: %.2f s\n", avg_wait);
+    printf("Tiempo total SIMULADO: %.0f s\n", sim_time);
+    printf("Tiempo de EJECUCIÓN (wall clock): %.3f s\n", wall_t1 - wall_t0);
 
     free(crossed_now);
     free(X.lights);
@@ -276,13 +273,12 @@ void run_simulation(int num_vehicles, int steps, int print_every, double dt, uns
 }
 
 int main(int argc, char** argv) {
-    int    N           = (argc > 1) ? atoi(argv[1]) : 8;    // vehículos
-    int    steps       = (argc > 2) ? atoi(argv[2]) : 60;   // duración (en pasos de dt)
-    int    print_every = (argc > 3) ? atoi(argv[3]) : 1;    // imprimir cada k pasos
-    double dt          = 1.0;                               // s
-    unsigned int seed  = (argc > 4) ? (unsigned int)atoi(argv[4]) : (unsigned int)time(NULL);
+    int    N           = (argc > 1) ? atoi(argv[1]) : 8;   // vehículos
+    int    print_every = (argc > 2) ? atoi(argv[2]) : 1;   // imprimir cada k pasos (= k segundos)
+    double dt          = 1.0;                              // s
+    unsigned int seed  = (argc > 3) ? (unsigned int)atoi(argv[3]) : (unsigned int)time(NULL);
 
     printf("OpenMP: max threads disponibles: %d\n", omp_get_max_threads());
-    run_simulation(N, steps, print_every, dt, seed);
+    run_simulation(N, print_every, dt, seed);
     return 0;
 }
