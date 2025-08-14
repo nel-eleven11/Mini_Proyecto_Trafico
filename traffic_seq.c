@@ -10,7 +10,7 @@
 
 typedef enum { RED = 0, GREEN = 1, YELLOW = 2 } LightState;
 
-// ----------------------- Estructuras (Paso 1) -----------------------
+// ----------------------- Estructuras -----------------------
 typedef struct {
     int        id;
     LightState state;
@@ -51,7 +51,7 @@ static inline double now_seconds() {
     return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
 }
 
-// ----------------------- Semáforos (Paso 3) -----------------------
+// ----------------------- Semáforos -----------------------
 void update_traffic_light(TrafficLight* L, double dt) {
     L->time_in_state += dt;
     switch (L->state) {
@@ -77,7 +77,7 @@ void update_traffic_light(TrafficLight* L, double dt) {
     }
 }
 
-// ----------------------- Vehículos (Paso 4) -----------------------
+// ----------------------- Vehículos -----------------------
 // Devuelve 1 si el vehículo cruzó en este paso; 0 si no.
 int move_vehicle(Vehicle* V, const Intersection* X, double dt) {
     if (V->finished) return 0; // ya cruzó antes
@@ -112,7 +112,7 @@ int move_vehicle(Vehicle* V, const Intersection* X, double dt) {
     return 0;
 }
 
-// ----------------------- Inicialización (Paso 2) -----------------------
+// ----------------------- Inicialización  -----------------------
 void init_intersection(Intersection* X, int num_lanes) {
     X->num_lanes = num_lanes;
     X->num_lights = num_lanes;
@@ -181,7 +181,7 @@ void print_state(int step, double sim_time, const Vehicle* V, const int* crossed
     printf("\n");
 }
 
-// ----------------------- Simulación (Paso 5-6) -----------------------
+// ----------------------- Simulación -----------------------
 void run_simulation(int num_vehicles, int print_every, double dt, unsigned int seed) {
     srand(seed);
 
@@ -251,8 +251,8 @@ void run_simulation(int num_vehicles, int print_every, double dt, unsigned int s
 }
 
 int main(int argc, char** argv) {
-    int    N           = (argc > 1) ? atoi(argv[1]) : 8;   // vehículos
-    int    print_every = (argc > 2) ? atoi(argv[2]) : 1;   // imprimir cada k pasos (= k segundos)
+    int    N           = (argc > 1) ? atoi(argv[1]) : 200;   // vehículos
+    int    print_every = (argc > 2) ? atoi(argv[2]) : 5;   // imprimir cada k pasos (= k segundos)
     double dt          = 1.0;                              // s
     unsigned int seed  = (argc > 3) ? (unsigned int)atoi(argv[3]) : (unsigned int)time(NULL);
 
